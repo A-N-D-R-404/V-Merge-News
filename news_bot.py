@@ -7,7 +7,6 @@ import time
 from pollinations import Pollinations
 
 # --- НАСТРОЙКИ ---
-# Токен и ID канала будут браться из секретов GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
 STATE_FILE = "published_news.json"
@@ -28,12 +27,11 @@ def save_state(state):
 def ask_ai(prompt_text):
     try:
         print("Отправка запроса к ИИ...")
-        # Небольшая пауза, чтобы не попасть под лимиты Pollinations
         time.sleep(3) 
         response = pollinations_client.generate_text(
             prompt_text,
             model="openai",
-            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."
+            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи. Обязательно используй Markdown для ссылок."
         )
         return response
     except Exception as e:
@@ -66,7 +64,6 @@ def main():
     state = load_state()
     new_articles = []
     
-    # Берем до 5 новостей
     for entry in feed.entries[:5]: 
         news_id = entry.get('id', entry.get('link', entry.title))
         
@@ -80,10 +77,19 @@ def main():
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
     
-    news_text = "\n".join([f"- {a.title}" for a in new_articles])
+    # Формируем текст для ИИ так, чтобы он видел ссылки
+    news_text = ""
+    for a in new_articles:
+        # Берем ссылку на статью
+        link = a.get('link', '')
+        title = a.get('title', '')
+        news_text += f"- Заголовок: {title}\n  Ссылка: {link}\n"
+
+    # ПРОМПТ: Просим сделать список с кликабельными ссылками
     prompt = (
         f"Ниже список новостей. Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
-        f"Начни каждый пункт с подходящего эмодзи. Не пиши вводных слов, только сами пункты:\n{news_text}"
+        f"В каждом пункте ОБЯЗАТЕЛЬНО сделай кликабельную ссылку на источник в формате Markdown: [Название](URL). "
+        f"Не пиши вводных слов, только сами пункты с эмодзи:\n{news_text}"
     )
     
     summary = ask_ai(prompt)
@@ -97,7 +103,8 @@ def main():
     payload = {
         "chat_id": CHANNEL_ID,
         "text": f"📰 **Сводка новостей**\n\n{summary}",
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True # Отключаем превью ссылок, чтобы пост был компактным
     }
     
     res = requests.post(url, json=payload)
