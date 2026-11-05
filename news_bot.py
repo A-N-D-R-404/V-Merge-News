@@ -9,6 +9,7 @@ import re
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
+POLLINATIONS_KEY = os.environ.get("POLLINATIONS_API_KEY") # <--- НОВАЯ ПЕРЕМЕННАЯ
 STATE_FILE = "published_news.json"
 RSS_URL = "https://news.google.com/rss/search?q=VPN&hl=ru&gl=RU&ceid=RU:ru"
 
@@ -30,14 +31,14 @@ def ask_ai(prompt_text):
         print("Отправка запроса к ИИ...")
         time.sleep(3) 
         
-        # Прямой запрос к актуальному API Pollinations
         url = "https://gen.pollinations.ai/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
+            "Authorization": f"Bearer {POLLINATIONS_KEY}", # <--- ДОБАВЛЕНА АВТОРИЗАЦИЯ
             "User-Agent": "V-Merge-News-Bot/1.0"
         }
         payload = {
-            "model": "openai", # Если не сработает, попробуйте "mistral"
+            "model": "openai", 
             "messages": [
                 {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
                 {"role": "user", "content": prompt_text}
@@ -54,29 +55,26 @@ def ask_ai(prompt_text):
         return None
 
 def clean_html_tags(text):
-    # Разрешаем только безопасные теги b, i, a, code, pre
     allowed_tags = ['b', 'i', 'a', 'code', 'pre']
-    
     def replace_tag(match):
         full_tag = match.group(0)
         tag_name = match.group(2).lower()
         if tag_name in allowed_tags:
             return full_tag
         return ""
-    
     cleaned = re.sub(r'(<\/?)([a-zA-Z0-9]+)([^>]*>)', replace_tag, text)
-    
-    # Убираем "висячие" закрывающие теги
     for tag in ['</b>', '</i>', '</a>', '</code>', '</pre>']:
         open_tag = tag.replace('/', '')
         if cleaned.count(open_tag) < cleaned.count(tag):
             cleaned = cleaned.replace(tag, '', cleaned.count(tag) - cleaned.count(open_tag))
-    
     return cleaned
 
 def main():
     if not TELEGRAM_TOKEN or not CHANNEL_ID:
         print("Ошибка: Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHANNEL_ID")
+        return
+    if not POLLINATIONS_KEY:
+        print("Ошибка: Не задан POLLINATIONS_API_KEY")
         return
 
     print("Загрузка новостей...")
@@ -92,17 +90,14 @@ def main():
         return
 
     feed = feedparser.parse(response.text)
-    
     if not feed.entries:
         print("Новости не найдены.")
         return
 
     state = load_state()
     new_articles = []
-    
     for entry in feed.entries[:5]: 
         news_id = entry.get('id', entry.get('link', entry.title))
-        
         if news_id not in state["published_ids"]:
             new_articles.append(entry)
             state["published_ids"].append(news_id)
@@ -112,9 +107,7 @@ def main():
         return
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
-    
     news_text = "\n".join([f"- {a.title} (Ссылка: {a.link})" for a in new_articles])
-
     prompt = (
         f"Ниже список новостей (в скобках указаны ссылки на источники). "
         f"Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
@@ -122,24 +115,17 @@ def main():
     )
     
     summary = ask_ai(prompt)
-    
     if not summary:
         print("Не удалось получить ответ от ИИ. Публикация отменена.")
         return
 
-    # --- ОЧИСТКА ТЕКСТА ---
     clean_summary = summary.replace('<', '&lt;').replace('>', '&gt;')
-    # Восстанавливаем разрешенные теги
     clean_summary = clean_summary.replace("&lt;a href=&quot;", "<a href='").replace("&quot;&gt;", "'>").replace("&lt;/a&gt;", "</a>")
-    
-    # Дополнительная очистка от висячих тегов
     clean_summary = clean_html_tags(clean_summary)
     
     print("Отправка в Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
     final_text = f"📰 <b>Сводка новостей</b>\n\n{clean_summary}"
-    
     payload = {
         "chat_id": CHANNEL_ID,
         "text": final_text,
@@ -148,13 +134,11 @@ def main():
     }
     
     res = requests.post(url, json=payload)
-    
     if res.status_code == 200:
         print("Успешно опубликовано!")
         save_state(state)
     else:
         print(f"Ошибка Telegram: {res.text}")
-        # Если ИИ сломал разметку, отправляем без ссылок и разметки
         fallback_text = f"📰 Сводка новостей\n\n{summary}\n\nИсточники:\n" + "\n".join([a.link for a in new_articles])
         fallback_payload = {"chat_id": CHANNEL_ID, "text": fallback_text}
         requests.post(url, json=fallback_payload)
