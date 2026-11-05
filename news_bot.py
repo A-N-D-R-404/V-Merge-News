@@ -5,15 +5,12 @@ import sys
 import requests
 import time
 import re
-from pollinations import Pollinations
 
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
 STATE_FILE = "published_news.json"
 RSS_URL = "https://news.google.com/rss/search?q=VPN&hl=ru&gl=RU&ceid=RU:ru"
-
-pollinations_client = Pollinations()
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -32,12 +29,26 @@ def ask_ai(prompt_text):
     try:
         print("Отправка запроса к ИИ...")
         time.sleep(3) 
-        response = pollinations_client.generate_text(
-            prompt_text,
-            model="openai",
-            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."
-        )
-        return response
+        
+        # Прямой запрос к актуальному API Pollinations
+        url = "https://gen.pollinations.ai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "V-Merge-News-Bot/1.0"
+        }
+        payload = {
+            "model": "openai", # Если не сработает, попробуйте "mistral"
+            "messages": [
+                {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
+                {"role": "user", "content": prompt_text}
+            ]
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return data['choices'][0]['message']['content']
+        
     except Exception as e:
         print(f"Ошибка ИИ Pollinations: {e}")
         return None
@@ -46,23 +57,19 @@ def clean_html_tags(text):
     # Разрешаем только безопасные теги b, i, a, code, pre
     allowed_tags = ['b', 'i', 'a', 'code', 'pre']
     
-    # Функция для обработки найденных тегов
     def replace_tag(match):
         full_tag = match.group(0)
         tag_name = match.group(2).lower()
-        
         if tag_name in allowed_tags:
             return full_tag
-        return "" # Удаляем неразрешенные теги
+        return ""
     
-    # Ищем все теги <...>
     cleaned = re.sub(r'(<\/?)([a-zA-Z0-9]+)([^>]*>)', replace_tag, text)
     
-    # Убираем "висячие" закрывающие теги, если им нет пары
+    # Убираем "висячие" закрывающие теги
     for tag in ['</b>', '</i>', '</a>', '</code>', '</pre>']:
         open_tag = tag.replace('/', '')
         if cleaned.count(open_tag) < cleaned.count(tag):
-            # Если закрывающих больше, чем открывающих, удаляем лишние
             cleaned = cleaned.replace(tag, '', cleaned.count(tag) - cleaned.count(open_tag))
     
     return cleaned
@@ -147,7 +154,7 @@ def main():
         save_state(state)
     else:
         print(f"Ошибка Telegram: {res.text}")
-        # Если ИИ сломал разметку, отправляем вообще без ссылок и разметки
+        # Если ИИ сломал разметку, отправляем без ссылок и разметки
         fallback_text = f"📰 Сводка новостей\n\n{summary}\n\nИсточники:\n" + "\n".join([a.link for a in new_articles])
         fallback_payload = {"chat_id": CHANNEL_ID, "text": fallback_text}
         requests.post(url, json=fallback_payload)
