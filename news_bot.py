@@ -9,7 +9,7 @@ import re
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
-POLLINATIONS_KEY = os.environ.get("POLLINATIONS_API_KEY") # <--- ВОЗВРАЩАЕМ КЛЮЧ
+POLLINATIONS_KEY = os.environ.get("POLLINATIONS_API_KEY")
 STATE_FILE = "published_news.json"
 RSS_URL = "https://news.google.com/rss/search?q=VPN&hl=ru&gl=RU&ceid=RU:ru"
 
@@ -27,38 +27,45 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False)
 
 def ask_ai(prompt_text):
-    try:
-        print("Отправка запроса к ИИ...")
-        time.sleep(2) 
-        
-        url = "https://gen.pollinations.ai/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "V-Merge-News-Bot/1.0"
-        }
-        
-        # Передаем ключ для авторизации
-        if POLLINATIONS_KEY:
-            headers["Authorization"] = f"Bearer {POLLINATIONS_KEY}"
-        else:
-            print("Внимание: POLLINATIONS_API_KEY не задан!")
-        
-        payload = {
-            "model": "openai/gpt-oss-20b", # Бесплатная модель
-            "messages": [
-                {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
-                {"role": "user", "content": prompt_text}
-            ]
-        }
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        return data['choices'][0]['message']['content']
-        
-    except Exception as e:
-        print(f"Ошибка ИИ Pollinations: {e}")
-        return None
+    url = "https://gen.pollinations.ai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "V-Merge-News-Bot/1.0"
+    }
+    
+    # Передаем ключ (если он есть)
+    if POLLINATIONS_KEY:
+        headers["Authorization"] = f"Bearer {POLLINATIONS_KEY}"
+    
+    payload = {
+        "model": "openai/gpt-oss-20b", # Бесплатная модель
+        "messages": [
+            {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
+            {"role": "user", "content": prompt_text}
+        ]
+    }
+    
+    # Делаем 3 попытки
+    for attempt in range(3):
+        try:
+            print(f"Отправка запроса к ИИ (Попытка {attempt + 1}/3)...")
+            time.sleep(2) 
+            
+            # Увеличили таймаут до 90 секунд
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            response.raise_for_status()
+            data = response.json()
+            return data['choices'][0]['message']['content']
+            
+        except Exception as e:
+            print(f"Ошибка ИИ (Попытка {attempt + 1}): {e}")
+            if attempt == 2: # Если это была последняя (третья) попытка
+                print("Все 3 попытки провалились. Публикация отменена.")
+                return None
+            print("Ждем 5 секунд перед следующей попыткой...")
+            time.sleep(5) 
+
+    return None
 
 def sanitize_telegram_html(text):
     url_pattern = r'(?:<a\s+href=[\'"]?([^\'">]+)[\'"]?>.*?</a>)|(https?://[^\s<]+)'
@@ -133,8 +140,7 @@ def main():
     summary = ask_ai(prompt)
     
     if not summary:
-        print("Не удалось получить ответ от ИИ. Публикация отменена.")
-        return
+        return # Публикация уже отменена внутри ask_ai
 
     clean_summary = sanitize_telegram_html(summary)
     
