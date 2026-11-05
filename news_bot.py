@@ -16,8 +16,12 @@ pollinations_client = Pollinations()
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            # Если файл битый, создаем новый
+            return {"published_ids": []}
     return {"published_ids": []}
 
 def save_state(state):
@@ -31,7 +35,7 @@ def ask_ai(prompt_text):
         response = pollinations_client.generate_text(
             prompt_text,
             model="openai",
-            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи. Обязательно используй Markdown для ссылок."
+            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."
         )
         return response
     except Exception as e:
@@ -77,19 +81,10 @@ def main():
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
     
-    # Формируем текст для ИИ так, чтобы он видел ссылки
-    news_text = ""
-    for a in new_articles:
-        # Берем ссылку на статью
-        link = a.get('link', '')
-        title = a.get('title', '')
-        news_text += f"- Заголовок: {title}\n  Ссылка: {link}\n"
-
-    # ПРОМПТ: Просим сделать список с кликабельными ссылками
+    news_text = "\n".join([f"- {a.title}" for a in new_articles])
     prompt = (
         f"Ниже список новостей. Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
-        f"В каждом пункте ОБЯЗАТЕЛЬНО сделай кликабельную ссылку на источник в формате Markdown: [Название](URL). "
-        f"Не пиши вводных слов, только сами пункты с эмодзи:\n{news_text}"
+        f"Начни каждый пункт с подходящего эмодзи. Не пиши вводных слов, только сами пункты:\n{news_text}"
     )
     
     summary = ask_ai(prompt)
@@ -98,21 +93,37 @@ def main():
         print("Не удалось получить ответ от ИИ. Публикация отменена.")
         return
 
+    # --- ОЧИСТКА ТЕКСТА ---
+    # Убираем опасные символы, ломающие Markdown/HTML
+    clean_summary = summary.replace('<', '&lt;').replace('>', '&gt;')
+    
     print("Отправка в Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    # Отправляем с HTML разметкой (безопаснее для ИИ)
     payload = {
         "chat_id": CHANNEL_ID,
-        "text": f"📰 **Сводка новостей**\n\n{summary}",
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True # Отключаем превью ссылок, чтобы пост был компактным
+        "text": f"📰 <b>Сводка новостей</b>\n\n{clean_summary}",
+        "parse_mode": "HTML"
     }
     
     res = requests.post(url, json=payload)
+    
+    # Если вдруг HTML тоже выдаст ошибку (из-за эмодзи или чего-то еще)
+    if res.status_code != 200:
+        print(f"Ошибка HTML-отправки: {res.text}. Пробуем отправить как обычный текст...")
+        # Отправляем вообще без разметки
+        payload = {
+            "chat_id": CHANNEL_ID,
+            "text": f"📰 Сводка новостей\n\n{summary}"
+        }
+        res = requests.post(url, json=payload)
+    
     if res.status_code == 200:
         print("Успешно опубликовано!")
         save_state(state)
     else:
-        print(f"Ошибка Telegram: {res.text}")
+        print(f"Критическая ошибка Telegram: {res.text}")
 
 if __name__ == "__main__":
     main()
