@@ -20,7 +20,6 @@ def load_state():
             with open(STATE_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            # Если файл битый, создаем новый
             return {"published_ids": []}
     return {"published_ids": []}
 
@@ -81,7 +80,12 @@ def main():
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
     
+    # Собираем заголовки для ИИ
     news_text = "\n".join([f"- {a.title}" for a in new_articles])
+    
+    # Собираем ссылки для отправки (отдельно от ИИ, чтобы не сломать разметку)
+    links_text = "\n".join([f"🔗 <a href='{a.link}'>Источник {i+1}</a>" for i, a in enumerate(new_articles)])
+
     prompt = (
         f"Ниже список новостей. Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
         f"Начни каждый пункт с подходящего эмодзи. Не пиши вводных слов, только сами пункты:\n{news_text}"
@@ -94,36 +98,32 @@ def main():
         return
 
     # --- ОЧИСТКА ТЕКСТА ---
-    # Убираем опасные символы, ломающие Markdown/HTML
     clean_summary = summary.replace('<', '&lt;').replace('>', '&gt;')
     
     print("Отправка в Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Отправляем с HTML разметкой (безопаснее для ИИ)
+    # Формируем итоговый текст: Заголовок + Сводка + Ссылки
+    final_text = f"📰 <b>Сводка новостей</b>\n\n{clean_summary}\n\n<b>Источники:</b>\n{links_text}"
+    
     payload = {
         "chat_id": CHANNEL_ID,
-        "text": f"📰 <b>Сводка новостей</b>\n\n{clean_summary}",
-        "parse_mode": "HTML"
+        "text": final_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True # Отключает огромные превью картинок из ссылок
     }
     
     res = requests.post(url, json=payload)
-    
-    # Если вдруг HTML тоже выдаст ошибку (из-за эмодзи или чего-то еще)
-    if res.status_code != 200:
-        print(f"Ошибка HTML-отправки: {res.text}. Пробуем отправить как обычный текст...")
-        # Отправляем вообще без разметки
-        payload = {
-            "chat_id": CHANNEL_ID,
-            "text": f"📰 Сводка новостей\n\n{summary}"
-        }
-        res = requests.post(url, json=payload)
     
     if res.status_code == 200:
         print("Успешно опубликовано!")
         save_state(state)
     else:
-        print(f"Критическая ошибка Telegram: {res.text}")
+        print(f"Ошибка Telegram: {res.text}")
+        # На всякий случай пробуем отправить без разметки, если Telegram снова закапризничает
+        fallback_text = f"📰 Сводка новостей\n\n{summary}\n\nИсточники:\n" + "\n".join([a.link for a in new_articles])
+        fallback_payload = {"chat_id": CHANNEL_ID, "text": fallback_text}
+        requests.post(url, json=fallback_payload)
 
 if __name__ == "__main__":
     main()
