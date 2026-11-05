@@ -5,15 +5,13 @@ import sys
 import requests
 import time
 import re
-from pollinations import Pollinations
 
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
+POLLINATIONS_KEY = os.environ.get("POLLINATIONS_API_KEY")
 STATE_FILE = "published_news.json"
 RSS_URL = "https://news.google.com/rss/search?q=VPN&hl=ru&gl=RU&ceid=RU:ru"
-
-pollinations_client = Pollinations()
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -32,12 +30,31 @@ def ask_ai(prompt_text):
     try:
         print("Отправка запроса к ИИ...")
         time.sleep(3) 
-        response = pollinations_client.generate_text(
-            prompt_text,
-            model="openai",
-            system="Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."
-        )
-        return response
+        
+        # Прямой запрос к актуальному API Pollinations
+        url = "https://gen.pollinations.ai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "V-Merge-News-Bot/1.0"
+        }
+        
+        # Добавляем ключ, если он есть (для обхода лимитов)
+        if POLLINATIONS_KEY:
+            headers["Authorization"] = f"Bearer {POLLINATIONS_KEY}"
+        
+        payload = {
+            "model": "openai", 
+            "messages": [
+                {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
+                {"role": "user", "content": prompt_text}
+            ]
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return data['choices'][0]['message']['content']
+        
     except Exception as e:
         print(f"Ошибка ИИ Pollinations: {e}")
         return None
@@ -48,27 +65,21 @@ def sanitize_telegram_html(text):
     аккуратные кликабельные слова "Источник". Удаляет весь остальной мусор.
     """
     # Паттерн для поиска ссылок внутри тегов <a> или просто голых ссылок
-    # Ищем либо <a href="...">...</a>, либо просто http(s)://...
     url_pattern = r'(?:<a\s+href=[\'"]?([^\'">]+)[\'"]?>.*?</a>)|(https?://[^\s<]+)'
     
     def replace_url(match):
-        # Если ссылка была в теге <a>, берем URL из первой группы
         url = match.group(1) if match.group(1) else match.group(2)
-        # Очищаем URL от возможных лишних кавычек в конце
-        url = url.strip('\'">')
-        # Возвращаем красивый кликабельный текст
+        url = url.strip('\'">') # Очищаем от лишних кавычек
         return f"<a href='{url}'>🔗 Источник</a>"
 
-    # Заменяем все ссылки (и теги, и голые) на наши красивые
+    # Заменяем все ссылки на наши красивые
     cleaned_text = re.sub(url_pattern, replace_url, text, flags=re.IGNORECASE)
     
     # Удаляем оставшиеся случайные HTML-теги (кроме <a>, <b>, <i>, <code>)
-    # Это уберет мусор, если ИИ сгенерировал что-то странное
     allowed_tags = ['a', 'b', 'i', 'code', 'pre']
     
     def tag_replacer(match):
         tag = match.group(0)
-        # Извлекаем имя тега (например, из <div> получаем div)
         tag_name = re.search(r'<(/?)(\w+)', tag)
         if tag_name and tag_name.group(2).lower() in allowed_tags:
             return tag
@@ -77,7 +88,6 @@ def sanitize_telegram_html(text):
     cleaned_text = re.sub(r'<[^>]+>', tag_replacer, cleaned_text)
     
     # Экранируем оставшиеся угловые скобки, которые не являются тегами
-    # (на случай, если ИИ написал что-то вроде "5 < 10")
     cleaned_text = cleaned_text.replace(" < ", " &lt; ").replace(" > ", " &gt; ")
 
     return cleaned_text
@@ -135,7 +145,7 @@ def main():
         print("Не удалось получить ответ от ИИ. Публикация отменена.")
         return
 
-    # Используем новую умную очистку
+    # Умная очистка текста и форматирование ссылок
     clean_summary = sanitize_telegram_html(summary)
     
     print("Отправка в Telegram...")
@@ -157,7 +167,7 @@ def main():
         save_state(state)
     else:
         print(f"Ошибка Telegram: {res.text}")
-        # Если Telegram снова закапризничает, отправляем вообще без разметки
+        # Если Telegram снова выдаст ошибку парсинга, отправим чистый текст без разметки
         fallback_text = f"📰 Сводка новостей\n\n{re.sub(r'<[^>]+>', '', summary)}\n\nИсточники:\n" + "\n".join([a.link for a in new_articles])
         fallback_payload = {"chat_id": CHANNEL_ID, "text": fallback_text}
         requests.post(url, json=fallback_payload)
