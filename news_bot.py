@@ -9,6 +9,7 @@ import re
 # --- НАСТРОЙКИ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
+POLLINATIONS_KEY = os.environ.get("POLLINATIONS_API_KEY") # <--- ВОЗВРАЩАЕМ КЛЮЧ
 STATE_FILE = "published_news.json"
 RSS_URL = "https://news.google.com/rss/search?q=VPN&hl=ru&gl=RU&ceid=RU:ru"
 
@@ -28,7 +29,7 @@ def save_state(state):
 def ask_ai(prompt_text):
     try:
         print("Отправка запроса к ИИ...")
-        time.sleep(2) # Небольшая пауза, чтобы не спамить
+        time.sleep(2) 
         
         url = "https://gen.pollinations.ai/v1/chat/completions"
         headers = {
@@ -36,9 +37,14 @@ def ask_ai(prompt_text):
             "User-Agent": "V-Merge-News-Bot/1.0"
         }
         
+        # Передаем ключ для авторизации
+        if POLLINATIONS_KEY:
+            headers["Authorization"] = f"Bearer {POLLINATIONS_KEY}"
+        else:
+            print("Внимание: POLLINATIONS_API_KEY не задан!")
+        
         payload = {
-            # Используем легкую и БЕСПЛАТНУЮ модель из списка
-            "model": "openai/gpt-oss-20b", 
+            "model": "openai/gpt-oss-20b", # Бесплатная модель
             "messages": [
                 {"role": "system", "content": "Ты — редактор VPN-канала. Пиши кратко, интересно и с эмодзи."},
                 {"role": "user", "content": prompt_text}
@@ -55,10 +61,6 @@ def ask_ai(prompt_text):
         return None
 
 def sanitize_telegram_html(text):
-    """
-    Ищет все ссылки (в тегах a или просто в тексте) и делает из них 
-    аккуратные кликабельные слова "Источник". Удаляет весь остальной мусор.
-    """
     url_pattern = r'(?:<a\s+href=[\'"]?([^\'">]+)[\'"]?>.*?</a>)|(https?://[^\s<]+)'
     
     def replace_url(match):
@@ -67,7 +69,6 @@ def sanitize_telegram_html(text):
         return f"<a href='{url}'>🔗 Источник</a>"
 
     cleaned_text = re.sub(url_pattern, replace_url, text, flags=re.IGNORECASE)
-    
     allowed_tags = ['a', 'b', 'i', 'code', 'pre']
     
     def tag_replacer(match):
