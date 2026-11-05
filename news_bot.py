@@ -80,15 +80,14 @@ def main():
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
     
-    # Собираем заголовки для ИИ
-    news_text = "\n".join([f"- {a.title}" for a in new_articles])
-    
-    # Собираем ссылки для отправки (отдельно от ИИ, чтобы не сломать разметку)
-    links_text = "\n".join([f"🔗 <a href='{a.link}'>Источник {i+1}</a>" for i, a in enumerate(new_articles)])
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Передаем ИИ заголовок И ссылку. Просим сохранить ссылку в конце.
+    news_text = "\n".join([f"- {a.title} (Ссылка: {a.link})" for a in new_articles])
 
     prompt = (
-        f"Ниже список новостей. Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
-        f"Начни каждый пункт с подходящего эмодзи. Не пиши вводных слов, только сами пункты:\n{news_text}"
+        f"Ниже список новостей (в скобках указаны ссылки на источники). "
+        f"Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
+        f"Начни каждый пункт с подходящего эмодзи. Обязательно оставь ссылку на источник в конце каждого пункта в формате: <a href='ССЫЛКА'>Источник</a>:\n{news_text}"
     )
     
     summary = ask_ai(prompt)
@@ -98,19 +97,20 @@ def main():
         return
 
     # --- ОЧИСТКА ТЕКСТА ---
+    # Очищаем только опасные символы, разрешаем теги <a> для ссылок
     clean_summary = summary.replace('<', '&lt;').replace('>', '&gt;')
+    clean_summary = clean_summary.replace("&lt;a href=&quot;", "<a href='").replace("&quot;&gt;", "'>").replace("&lt;/a&gt;", "</a>")
     
     print("Отправка в Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # Формируем итоговый текст: Заголовок + Сводка + Ссылки
-    final_text = f"📰 <b>Сводка новостей</b>\n\n{clean_summary}\n\n<b>Источники:</b>\n{links_text}"
+    final_text = f"📰 <b>Сводка новостей</b>\n\n{clean_summary}"
     
     payload = {
         "chat_id": CHANNEL_ID,
         "text": final_text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True # Отключает огромные превью картинок из ссылок
+        "disable_web_page_preview": True
     }
     
     res = requests.post(url, json=payload)
@@ -120,7 +120,7 @@ def main():
         save_state(state)
     else:
         print(f"Ошибка Telegram: {res.text}")
-        # На всякий случай пробуем отправить без разметки, если Telegram снова закапризничает
+        # Если ИИ сломал разметку, отправляем вообще без ссылок и разметки
         fallback_text = f"📰 Сводка новостей\n\n{summary}\n\nИсточники:\n" + "\n".join([a.link for a in new_articles])
         fallback_payload = {"chat_id": CHANNEL_ID, "text": fallback_text}
         requests.post(url, json=fallback_payload)
