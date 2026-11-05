@@ -4,6 +4,7 @@ import os
 import sys
 import requests
 import time
+import re
 from pollinations import Pollinations
 
 # --- НАСТРОЙКИ ---
@@ -40,6 +41,31 @@ def ask_ai(prompt_text):
     except Exception as e:
         print(f"Ошибка ИИ Pollinations: {e}")
         return None
+
+def clean_html_tags(text):
+    # Разрешаем только безопасные теги b, i, a, code, pre
+    allowed_tags = ['b', 'i', 'a', 'code', 'pre']
+    
+    # Функция для обработки найденных тегов
+    def replace_tag(match):
+        full_tag = match.group(0)
+        tag_name = match.group(2).lower()
+        
+        if tag_name in allowed_tags:
+            return full_tag
+        return "" # Удаляем неразрешенные теги
+    
+    # Ищем все теги <...>
+    cleaned = re.sub(r'(<\/?)([a-zA-Z0-9]+)([^>]*>)', replace_tag, text)
+    
+    # Убираем "висячие" закрывающие теги, если им нет пары
+    for tag in ['</b>', '</i>', '</a>', '</code>', '</pre>']:
+        open_tag = tag.replace('/', '')
+        if cleaned.count(open_tag) < cleaned.count(tag):
+            # Если закрывающих больше, чем открывающих, удаляем лишние
+            cleaned = cleaned.replace(tag, '', cleaned.count(tag) - cleaned.count(open_tag))
+    
+    return cleaned
 
 def main():
     if not TELEGRAM_TOKEN or not CHANNEL_ID:
@@ -80,14 +106,12 @@ def main():
 
     print(f"Найдено новых новостей: {len(new_articles)}. Отправляем в ИИ...")
     
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    # Передаем ИИ заголовок И ссылку. Просим сохранить ссылку в конце.
     news_text = "\n".join([f"- {a.title} (Ссылка: {a.link})" for a in new_articles])
 
     prompt = (
         f"Ниже список новостей (в скобках указаны ссылки на источники). "
         f"Сделай из них краткую сводку в виде списка (каждый пункт с новой строки). "
-        f"Начни каждый пункт с подходящего эмодзи. Обязательно оставь ссылку на источник в конце каждого пункта в формате: <a href='ССЫЛКА'>Источник</a>:\n{news_text}"
+        f"Начни каждый пункт с подходящего эмодзи. ВАЖНО: В конце каждого пункта напиши ссылку на источник в формате <a href='ССЫЛКА'>Источник</a>:\n{news_text}"
     )
     
     summary = ask_ai(prompt)
@@ -97,9 +121,12 @@ def main():
         return
 
     # --- ОЧИСТКА ТЕКСТА ---
-    # Очищаем только опасные символы, разрешаем теги <a> для ссылок
     clean_summary = summary.replace('<', '&lt;').replace('>', '&gt;')
+    # Восстанавливаем разрешенные теги
     clean_summary = clean_summary.replace("&lt;a href=&quot;", "<a href='").replace("&quot;&gt;", "'>").replace("&lt;/a&gt;", "</a>")
+    
+    # Дополнительная очистка от висячих тегов
+    clean_summary = clean_html_tags(clean_summary)
     
     print("Отправка в Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
