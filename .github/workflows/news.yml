@@ -2,11 +2,11 @@ name: News Auto-Poster
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Запуск каждые 4 часа (можно поменять)
+    - cron: '0 */4 * * *' # Запуск каждые 4 часа
   workflow_dispatch: # Кнопка для ручного запуска
 
 permissions:
-  contents: write # Важно! Дает права на коммит файла published_news.json
+  contents: write # Дает права на коммит файла published_news.json
 
 jobs:
   post-news:
@@ -35,10 +35,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add published_news.json
-          if git diff --cached --quiet; then
-            echo "Нет изменений в state"
+          
+          # Проверяем, существует ли файл перед добавлением
+          if [ -f published_news.json ]; then
+            git add published_news.json
+            if git diff --cached --quiet; then
+              echo "Нет изменений в state"
+            else
+              git commit -m "auto: update published news state [skip ci]"
+              git push
+            fi
           else
-            git commit -m "auto: update published news state [skip ci]"
-            git push
+            echo "Файл published_news.json не был создан (вероятно, не было новых новостей)."
           fi
